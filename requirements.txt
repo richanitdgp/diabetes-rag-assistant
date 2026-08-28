@@ -1,0 +1,20 @@
+# Core RAG framework
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-openai>=0.1.0
+
+# LLM / embeddings provider
+openai>=1.30.0
+tiktoken>=0.7.0
+
+# Vector database
+chromadb>=0.5.0
+
+# Document loading (PDF/text ingestion)
+pypdf>=4.2.0
+
+# App / UI
+streamlit>=1.35.0
+
+# Config management
+python-dotenv>=1.0.0
