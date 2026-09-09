@@ -35,4 +35,16 @@ overwritten by id, so re-running is safe). A failed download is recorded
 in the manifest with `"status": "error"` and the underlying error, rather
 than silently skipped — check the manifest after each run.
 
+## `processed/` and `chroma/` (generated, gitignored)
+
+`ingestion/build_index.py` parses everything in `raw/` into structured
+chunks (`processed/chunks.jsonl`, for inspection) and embeds + loads them
+into a local Chroma collection (`chroma/`). Both are build outputs
+regenerable from `raw/` — not committed, see `.gitignore`. Run it after
+`download_sources.py` picks up a new or updated source:
+
+```bash
+python -m ingestion.build_index
+```
+
 - Large or sensitive datasets should not be committed directly — see `.gitignore` and add exclusions as needed.
