@@ -13,6 +13,9 @@ chromadb>=0.5.0
 # Document loading (PDF/text ingestion)
 pypdf>=4.2.0
 
+# Source retrieval (data/raw ingestion scripts)
+requests>=2.31.0
+
 # App / UI
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
