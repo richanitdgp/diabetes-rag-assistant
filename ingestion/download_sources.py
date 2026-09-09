@@ -1,8 +1,9 @@
 """Download raw source documents for the diabetes RAG knowledge base.
 
-v1 scope is deliberately narrow: ADA + CDC only. NICE (and any other
-guideline body) is deferred to a later version so v1 can ship an
-evaluated pipeline in week one instead of stalling on ingestion breadth.
+v1 scope is deliberately narrow: CDC patient-education pages only. ADA
+Standards of Care and NICE are both deferred (see DEFERRED_SOURCES below
+for ADA) so v1 can ship an evaluated pipeline in week one instead of
+stalling on ingestion breadth.
 
 Guidelines are updated annually (e.g. "Standards of Care in Diabetes"
 gets a new year every December/January), so every run is recorded in
@@ -44,31 +45,9 @@ class Source:
     notes: str = ""
 
 
-# v1 sources: ADA + CDC only. See module docstring.
-#
-# NOTE ON URLS: these were located via web search from a sandboxed session
-# whose network egress policy blocks diabetesjournals.org, professional.diabetes.org,
-# diabetes.org, and cdc.gov, so they could not be verified by an actual fetch here.
-# The script detects content-type at download time and stores whatever is
-# actually returned (see `status`/`content_type` in the manifest); if a URL
-# below turns out to be a landing page rather than a direct file, update it
-# once you can browse the site and re-run.
+# v1 active sources: CDC only. ADA is defined below in DEFERRED_SOURCES
+# and deliberately left out of this list — see that comment for why.
 SOURCES: list[Source] = [
-    Source(
-        id="ada-standards-of-care-2026",
-        title="Standards of Care in Diabetes—2026 (Abridged for Primary Care Professionals)",
-        publisher="American Diabetes Association (ADA)",
-        url="https://diabetesjournals.org/docm-care/article/1/3/487/164620/Standards-of-Care-in-Diabetes-2026-Abridged-for",
-        category="clinical_guideline",
-        local_path=RAW_DIR / "ada" / "standards-of-care-2026-abridged.pdf",
-        notes=(
-            "Abridged Standards of Care, chosen for v1 as a single compact PDF "
-            "with recommendations substantively the same as the complete "
-            "Standards of Care (Diabetes Care, Vol 49, Supplement 1). "
-            "Full multi-chapter edition: "
-            "https://diabetesjournals.org/care/issue/49/Supplement_1"
-        ),
-    ),
     Source(
         id="cdc-diabetes-basics",
         title="Diabetes Basics",
@@ -84,6 +63,30 @@ SOURCES: list[Source] = [
         url="https://www.cdc.gov/diabetes/living-with/index.html",
         category="patient_education",
         local_path=RAW_DIR / "cdc" / "living-with-diabetes.html",
+    ),
+]
+
+# Deferred for now: ADA returns a real 403 (not a network block) from its
+# Silverchair-hosted journal site, most likely anti-bot protection rejecting
+# a plain requests.get(). Skipped from v1 per decision to ship CDC-only
+# first. To bring ADA back: move this into SOURCES (and give `download()`
+# a more browser-like header set / session if 403s persist), or fetch it
+# manually and drop the file into data/raw/ada/ directly.
+DEFERRED_SOURCES: list[Source] = [
+    Source(
+        id="ada-standards-of-care-2026",
+        title="Standards of Care in Diabetes—2026 (Abridged for Primary Care Professionals)",
+        publisher="American Diabetes Association (ADA)",
+        url="https://diabetesjournals.org/docm-care/article/1/3/487/164620/Standards-of-Care-in-Diabetes-2026-Abridged-for",
+        category="clinical_guideline",
+        local_path=RAW_DIR / "ada" / "standards-of-care-2026-abridged.pdf",
+        notes=(
+            "Abridged Standards of Care, chosen as a single compact PDF "
+            "with recommendations substantively the same as the complete "
+            "Standards of Care (Diabetes Care, Vol 49, Supplement 1). "
+            "Full multi-chapter edition: "
+            "https://diabetesjournals.org/care/issue/49/Supplement_1"
+        ),
     ),
 ]
 
@@ -156,7 +159,10 @@ def main() -> None:
         else:
             print(f"  ERROR: {entry['error']}")
 
-    manifest["sources"] = list(by_id.values())
+    # Manifest tracks only currently-active sources, so a source moved to
+    # DEFERRED_SOURCES (or removed) doesn't leave a stale entry behind.
+    active_ids = {source.id for source in SOURCES}
+    manifest["sources"] = [entry for entry in by_id.values() if entry["id"] in active_ids]
     save_manifest(manifest)
     print(f"\nManifest written to {MANIFEST_PATH.relative_to(REPO_ROOT)}")
 
