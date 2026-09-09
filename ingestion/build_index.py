@@ -7,7 +7,7 @@ annual guideline update via download_sources.py).
 Pipeline:
   1. Read data/raw/manifest.json for sources with status "ok".
   2. Parse each into structure-respecting Chunks (see parsers.py).
-  3. Embed chunk text with OpenAI's text-embedding-3-small.
+  3. Embed chunk text with Gemini's gemini-embedding-001.
   4. Upsert (id, embedding, document, metadata) into a persistent local
      Chroma collection at data/chroma/.
 
@@ -16,7 +16,10 @@ Usage (run from the repo root, as a module so relative imports resolve):
     python -m ingestion.build_index --parse-only  # steps 1-2 only, no API key needed
     python -m ingestion.build_index --chunks-out data/processed/chunks.jsonl
 
-Requires OPENAI_API_KEY (see .env.example) for the embed/load steps.
+Requires GOOGLE_API_KEY or GEMINI_API_KEY (see .env.example) for the embed/load
+steps. If data/chroma/ already holds vectors from a different embedding
+model, delete it before re-running — a Chroma collection is locked to
+whatever vector dimensionality its first entries were written with.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ MANIFEST_PATH = REPO_ROOT / "data" / "raw" / "manifest.json"
 DEFAULT_CHUNKS_OUT = REPO_ROOT / "data" / "processed" / "chunks.jsonl"
 CHROMA_DIR = REPO_ROOT / "data" / "chroma"
 CHROMA_COLLECTION = "diabetes-guidelines"
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "gemini-embedding-001"
 EMBED_BATCH_SIZE = 100
 
 
@@ -62,17 +65,21 @@ def write_chunks_jsonl(chunks: list[Chunk], out_path: Path) -> None:
 
 
 def embed_chunks(chunks: list[Chunk]) -> list[list[float]]:
-    from openai import OpenAI
+    from google import genai
+    from google.genai import types
 
-    client = OpenAI()
+    # genai.Client() with no args reads GOOGLE_API_KEY (or GEMINI_API_KEY as a
+    # fallback) from the environment — same pattern as OpenAI() before it.
+    client = genai.Client()
     embeddings: list[list[float]] = []
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]
-        response = client.embeddings.create(
+        response = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            input=[chunk.text for chunk in batch],
+            contents=[chunk.text for chunk in batch],
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
         )
-        embeddings.extend(item.embedding for item in response.data)
+        embeddings.extend(item.values for item in response.embeddings)
         print(f"embedded {start + len(batch)}/{len(chunks)}")
     return embeddings
 
@@ -118,8 +125,10 @@ def main() -> None:
     if args.parse_only:
         return
 
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY is not set (see .env.example). Use --parse-only to skip embedding.")
+    if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+        raise SystemExit(
+            "GOOGLE_API_KEY / GEMINI_API_KEY is not set (see .env.example). Use --parse-only to skip embedding."
+        )
 
     embeddings = embed_chunks(chunks)
     load_into_chroma(chunks, embeddings)
