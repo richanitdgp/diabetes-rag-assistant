@@ -7,10 +7,10 @@
       "category": "clinical_guideline",
       "source_url": "https://diabetesjournals.org/docm-care/article/1/3/487/164620/Standards-of-Care-in-Diabetes-2026-Abridged-for",
       "local_path": "data/raw/ada/standards-of-care-2026-abridged.pdf",
-      "retrieved_at": "2026-09-09T16:32:40.276435+00:00",
+      "retrieved_at": "2026-09-09T16:41:47.259293+00:00",
       "notes": "Abridged Standards of Care, chosen for v1 as a single compact PDF with recommendations substantively the same as the complete Standards of Care (Diabetes Care, Vol 49, Supplement 1). Full multi-chapter edition: https://diabetesjournals.org/care/issue/49/Supplement_1",
       "status": "error",
-      "error": "HTTPSConnectionPool(host='diabetesjournals.org', port=443): Max retries exceeded with url: /docm-care/article/1/3/487/164620/Standards-of-Care-in-Diabetes-2026-Abridged-for (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden')))"
+      "error": "403 Client Error: Forbidden for url: https://diabetesjournals.org/docm-care/article/1/3/487/164620/Standards-of-Care-in-Diabetes-2026-Abridged-for"
     },
     {
       "id": "cdc-diabetes-basics",
@@ -19,10 +19,13 @@
       "category": "patient_education",
       "source_url": "https://www.cdc.gov/diabetes/about/index.html",
       "local_path": "data/raw/cdc/diabetes-basics.html",
-      "retrieved_at": "2026-09-09T16:32:40.637053+00:00",
+      "retrieved_at": "2026-09-09T16:41:47.370832+00:00",
       "notes": "",
-      "status": "error",
-      "error": "HTTPSConnectionPool(host='www.cdc.gov', port=443): Max retries exceeded with url: /diabetes/about/index.html (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden')))"
+      "status": "ok",
+      "final_url": "https://www.cdc.gov/diabetes/about/index.html",
+      "content_type": "text/html",
+      "size_bytes": 65476,
+      "sha256": "6a0da27e4fbc05e2e61ca5155608d1d2db3851f5f58ffe84851b0cbd24d1a750"
     },
     {
       "id": "cdc-living-with-diabetes",
@@ -31,10 +34,13 @@
       "category": "patient_education",
       "source_url": "https://www.cdc.gov/diabetes/living-with/index.html",
       "local_path": "data/raw/cdc/living-with-diabetes.html",
-      "retrieved_at": "2026-09-09T16:32:40.942844+00:00",
+      "retrieved_at": "2026-09-09T16:41:48.991911+00:00",
       "notes": "",
-      "status": "error",
-      "error": "HTTPSConnectionPool(host='www.cdc.gov', port=443): Max retries exceeded with url: /diabetes/living-with/index.html (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden')))"
+      "status": "ok",
+      "final_url": "https://www.cdc.gov/diabetes/living-with/index.html",
+      "content_type": "text/html",
+      "size_bytes": 61525,
+      "sha256": "874405a8a03e4bebe912f1f6f3f44af0136811dfba0fbab640c8e9cc0271881c"
     }
   ]
 }
