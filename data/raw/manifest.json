@@ -1,18 +1,6 @@
 {
   "sources": [
     {
-      "id": "ada-standards-of-care-2026",
-      "title": "Standards of Care in Diabetes\u20142026 (Abridged for Primary Care Professionals)",
-      "publisher": "American Diabetes Association (ADA)",
-      "category": "clinical_guideline",
-      "source_url": "https://diabetesjournals.org/docm-care/article/1/3/487/164620/Standards-of-Care-in-Diabetes-2026-Abridged-for",
-      "local_path": "data/raw/ada/standards-of-care-2026-abridged.pdf",
-      "retrieved_at": "2026-09-09T16:41:47.259293+00:00",
-      "notes": "Abridged Standards of Care, chosen for v1 as a single compact PDF with recommendations substantively the same as the complete Standards of Care (Diabetes Care, Vol 49, Supplement 1). Full multi-chapter edition: https://diabetesjournals.org/care/issue/49/Supplement_1",
-      "status": "error",
-      "error": "403 Client Error: Forbidden for url: https://diabetesjournals.org/docm-care/article/1/3/487/164620/Standards-of-Care-in-Diabetes-2026-Abridged-for"
-    },
-    {
       "id": "cdc-diabetes-basics",
       "title": "Diabetes Basics",
       "publisher": "Centers for Disease Control and Prevention (CDC)",

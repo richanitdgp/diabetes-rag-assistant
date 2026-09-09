@@ -5,12 +5,15 @@ Raw source documents and sample data for the diabetes RAG assistant.
 ## `raw/`
 
 Raw, unmodified source documents used for ingestion, one subfolder per
-publisher (`raw/ada/`, `raw/cdc/`, ...). Nothing in this tree is hand-edited —
-it's exactly what was retrieved from the source.
+publisher (`raw/cdc/`, ...). Nothing in this tree is hand-edited — it's
+exactly what was retrieved from the source.
 
-**v1 scope is ADA + CDC only.** Other guideline bodies (e.g. NICE) are
-deferred to a later version so the pipeline can ship an evaluated v1 in
-week one instead of stalling on ingestion breadth.
+**v1 scope is CDC only.** ADA Standards of Care and NICE are both
+deferred so the pipeline can ship an evaluated v1 in week one instead of
+stalling on ingestion breadth. ADA in particular is defined in
+`ingestion/download_sources.py`'s `DEFERRED_SOURCES` (its journal site
+returns a 403, likely anti-bot protection) — see that file for how to
+bring it back in.
 
 Every file is tracked in [`raw/manifest.json`](raw/manifest.json), which
 records, per source: id, title, publisher, category, source URL, local
