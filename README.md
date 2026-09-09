@@ -23,4 +23,24 @@ A retrieval-augmented generation (RAG) assistant for answering questions about d
 
 ## Usage
 
-_TODO: add run instructions once the assistant entry point is implemented._
+1. Fetch sources and build the vector index (needs `GOOGLE_API_KEY`/`GEMINI_API_KEY`):
+   ```bash
+   python ingestion/download_sources.py
+   python -m ingestion.build_index
+   ```
+
+2. Run the API (needs `OPENAI_API_KEY`):
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+
+3. Ask a question:
+   ```bash
+   curl -s http://localhost:8000/ask \
+     -H 'Content-Type: application/json' \
+     -d '{"question": "What is type 2 diabetes?", "top_k": 5}'
+   ```
+   Returns `{"answer": "...", "sources": [...]}`. The answer is grounded
+   strictly in retrieved context, cites `[Source Title — Section Title]`
+   inline, and the assistant refuses rather than guesses when retrieval
+   doesn't support a confident answer.
