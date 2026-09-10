@@ -41,7 +41,7 @@ class Chunk:
     chunk_index: int = 0
 
     def metadata(self) -> dict:
-        """Metadata dict suitable for a Chroma `metadatas` entry (no None values — Chroma rejects them)."""
+        """Metadata dict spread into the MongoDB document alongside text/embedding (no None values, so an absent field is simply omitted rather than stored as null)."""
         meta = {
             "source_id": self.source_id,
             "source_title": self.source_title,

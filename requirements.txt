@@ -10,8 +10,8 @@ tiktoken>=0.7.0
 # Embeddings provider (used by ingestion/build_index.py)
 google-genai>=1.0.0
 
-# Vector database
-chromadb>=0.5.0
+# Vector database (MongoDB Atlas Vector Search)
+pymongo>=4.9.0
 
 # Document loading (PDF/text ingestion)
 pypdf>=4.2.0

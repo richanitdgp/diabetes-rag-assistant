@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from pymongo.errors import PyMongoError
 
 from app.generation import generate_answer
 from app.retrieval import retrieve
@@ -34,7 +35,7 @@ def ask(request: AskRequest) -> AskResponse:
     """Retrieve top-k relevant chunks and generate a context-grounded answer."""
     try:
         chunks = retrieve(request.question, top_k=request.top_k)
-    except RuntimeError as exc:
+    except (RuntimeError, PyMongoError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     answer = generate_answer(request.question, chunks)

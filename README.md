@@ -23,13 +23,15 @@ A retrieval-augmented generation (RAG) assistant for answering questions about d
 
 ## Usage
 
-1. Fetch sources and build the vector index (needs `GOOGLE_API_KEY`/`GEMINI_API_KEY`):
+1. Fetch sources and build the vector index (needs `GOOGLE_API_KEY`/`GEMINI_API_KEY` and `MONGODB_URI`, pointing at an Atlas cluster with Vector Search support):
    ```bash
    python ingestion/download_sources.py
    python -m ingestion.build_index
    ```
+   This is a separate, occasional step, not something the running API does
+   itself — re-run it whenever `data/raw/manifest.json` changes.
 
-2. Run the API (needs `GOOGLE_API_KEY`/`GEMINI_API_KEY`):
+2. Run the API (needs `GOOGLE_API_KEY`/`GEMINI_API_KEY` and `MONGODB_URI`):
    ```bash
    uvicorn app.main:app --reload
    ```

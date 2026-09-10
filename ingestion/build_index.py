@@ -1,25 +1,29 @@
-"""Build the local vector index: parse -> embed -> load into Chroma.
+"""Build the vector index: parse -> embed -> load into MongoDB Atlas.
 
 A plain script (not a notebook) so it can run unattended — locally, in CI,
 or on a schedule — whenever data/raw/manifest.json changes (e.g. after an
-annual guideline update via download_sources.py).
+annual guideline update via download_sources.py). Ingestion is deliberately
+decoupled from deploying the app: it writes to a shared Atlas cluster the
+running API only ever reads from, so re-running it is how the knowledge
+base gets refreshed, independent of any deploy.
 
 Pipeline:
   1. Read data/raw/manifest.json for sources with status "ok".
   2. Parse each into structure-respecting Chunks (see parsers.py).
   3. Embed chunk text with Gemini's gemini-embedding-001.
-  4. Upsert (id, embedding, document, metadata) into a persistent local
-     Chroma collection at data/chroma/.
+  4. Upsert (_id, embedding, text, metadata) into a MongoDB Atlas collection,
+     and create its Atlas Vector Search index if it doesn't exist yet.
 
 Usage (run from the repo root, as a module so relative imports resolve):
     python -m ingestion.build_index              # full pipeline
     python -m ingestion.build_index --parse-only  # steps 1-2 only, no API key needed
     python -m ingestion.build_index --chunks-out data/processed/chunks.jsonl
 
-Requires GOOGLE_API_KEY or GEMINI_API_KEY (see .env.example) for the embed/load
-steps. If data/chroma/ already holds vectors from a different embedding
-model, delete it before re-running — a Chroma collection is locked to
-whatever vector dimensionality its first entries were written with.
+Requires GOOGLE_API_KEY or GEMINI_API_KEY for embedding, and MONGODB_URI for
+the Atlas connection (see .env.example) for the embed/load steps. If
+MONGODB_COLLECTION already holds vectors from a different embedding model,
+drop its vector search index before re-running — an Atlas vector index is
+locked to whatever numDimensions it was created with.
 """
 
 from __future__ import annotations
@@ -36,8 +40,10 @@ from ingestion.parsers import Chunk, parse_source
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO_ROOT / "data" / "raw" / "manifest.json"
 DEFAULT_CHUNKS_OUT = REPO_ROOT / "data" / "processed" / "chunks.jsonl"
-CHROMA_DIR = REPO_ROOT / "data" / "chroma"
-CHROMA_COLLECTION = "diabetes-guidelines"
+MONGODB_DB = "diabetes_rag"
+MONGODB_COLLECTION = "chunks"
+VECTOR_INDEX_NAME = "chunks_vector_index"
+VECTOR_FIELD = "embedding"
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBED_BATCH_SIZE = 100
 
@@ -84,22 +90,65 @@ def embed_chunks(chunks: list[Chunk]) -> list[list[float]]:
     return embeddings
 
 
-def load_into_chroma(chunks: list[Chunk], embeddings: list[list[float]]) -> None:
-    import chromadb
+def load_into_mongo(chunks: list[Chunk], embeddings: list[list[float]]) -> None:
+    from pymongo import MongoClient, ReplaceOne
 
-    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    collection = client.get_or_create_collection(
-        CHROMA_COLLECTION,
-        metadata={"embedding_model": EMBEDDING_MODEL},
+    mongodb_uri = os.environ["MONGODB_URI"]
+    client = MongoClient(mongodb_uri)
+    collection = client[MONGODB_DB][MONGODB_COLLECTION]
+
+    operations = [
+        ReplaceOne(
+            {"_id": chunk.id},
+            {"_id": chunk.id, "text": chunk.text, VECTOR_FIELD: embedding, **chunk.metadata()},
+            upsert=True,
+        )
+        for chunk, embedding in zip(chunks, embeddings)
+    ]
+    result = collection.bulk_write(operations)
+    print(
+        f"upserted into '{MONGODB_DB}.{MONGODB_COLLECTION}': "
+        f"{result.upserted_count} inserted, {result.modified_count} updated"
     )
-    collection.upsert(
-        ids=[chunk.id for chunk in chunks],
-        embeddings=embeddings,
-        documents=[chunk.text for chunk in chunks],
-        metadatas=[chunk.metadata() for chunk in chunks],
+
+    _ensure_vector_index(collection, dimensions=len(embeddings[0]))
+
+
+def _ensure_vector_index(collection, dimensions: int) -> None:
+    """Create the Atlas Vector Search index if it doesn't already exist.
+
+    Idempotent, so it's safe to call on every ingestion run. NOTE:
+    unverified against a real Atlas cluster as of writing (no cluster
+    available in the environment this was written in) — the shape here
+    follows pymongo's documented SearchIndexModel/create_search_index API;
+    double-check against your pymongo version if this errors.
+    """
+    from pymongo.operations import SearchIndexModel
+
+    existing = {idx["name"] for idx in collection.list_search_indexes()}
+    if VECTOR_INDEX_NAME in existing:
+        print(f"vector index '{VECTOR_INDEX_NAME}' already exists, skipping")
+        return
+
+    model = SearchIndexModel(
+        name=VECTOR_INDEX_NAME,
+        type="vectorSearch",
+        definition={
+            "fields": [
+                {
+                    "type": "vector",
+                    "path": VECTOR_FIELD,
+                    "numDimensions": dimensions,
+                    "similarity": "cosine",
+                }
+            ]
+        },
     )
-    print(f"upserted {len(chunks)} chunks into '{CHROMA_COLLECTION}' at {CHROMA_DIR.relative_to(REPO_ROOT)}")
+    collection.create_search_index(model)
+    print(
+        f"created vector index '{VECTOR_INDEX_NAME}' ({dimensions} dims) — "
+        "Atlas builds it asynchronously, so it may take a minute before queries work"
+    )
 
 
 def main() -> None:
@@ -129,9 +178,11 @@ def main() -> None:
         raise SystemExit(
             "GOOGLE_API_KEY / GEMINI_API_KEY is not set (see .env.example). Use --parse-only to skip embedding."
         )
+    if not os.environ.get("MONGODB_URI"):
+        raise SystemExit("MONGODB_URI is not set (see .env.example). Use --parse-only to skip embedding/loading.")
 
     embeddings = embed_chunks(chunks)
-    load_into_chroma(chunks, embeddings)
+    load_into_mongo(chunks, embeddings)
 
 
 if __name__ == "__main__":
