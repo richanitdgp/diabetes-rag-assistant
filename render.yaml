@@ -3,6 +3,12 @@ services:
     name: diabetes-rag-assistant
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      python ingestion/download_sources.py &&
+      python -m ingestion.build_index
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
