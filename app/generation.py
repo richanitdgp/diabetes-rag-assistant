@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from app.retrieval import RetrievedChunk
 
-CHAT_MODEL = "gpt-4o-mini"
+CHAT_MODEL = "gemini-3.5-flash-lite"
 
 REFUSAL_MESSAGE = (
     "I don't have enough information in the retrieved sources to answer that "
@@ -59,7 +59,8 @@ def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
     if not chunks:
         return REFUSAL_MESSAGE
 
-    from openai import OpenAI
+    from google import genai
+    from google.genai import types
 
     user_message = (
         f"Context passages:\n\n{_format_context(chunks)}\n\n"
@@ -68,13 +69,13 @@ def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
         "citation [Source Title — Section Title] for every claim."
     )
 
-    client = OpenAI()
-    response = client.chat.completions.create(
+    client = genai.Client()
+    response = client.models.generate_content(
         model=CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0,
+        contents=user_message,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0,
+        ),
     )
-    return response.choices[0].message.content or REFUSAL_MESSAGE
+    return response.text or REFUSAL_MESSAGE

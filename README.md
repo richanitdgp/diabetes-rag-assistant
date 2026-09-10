@@ -29,7 +29,7 @@ A retrieval-augmented generation (RAG) assistant for answering questions about d
    python -m ingestion.build_index
    ```
 
-2. Run the API (needs `OPENAI_API_KEY`):
+2. Run the API (needs `GOOGLE_API_KEY`/`GEMINI_API_KEY`):
    ```bash
    uvicorn app.main:app --reload
    ```
