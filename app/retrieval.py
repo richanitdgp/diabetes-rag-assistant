@@ -1,4 +1,4 @@
-"""Vector similarity retrieval over the local Chroma index.
+"""Vector similarity retrieval over the MongoDB Atlas Vector Search index.
 
 Embeds the query with the same Gemini embedding model used at ingestion time
 (see ingestion/build_index.py), but with task_type="RETRIEVAL_QUERY" rather
@@ -8,11 +8,18 @@ and document text are embedded differently for best retrieval quality.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
-from ingestion.build_index import CHROMA_COLLECTION, CHROMA_DIR, EMBEDDING_MODEL
+from ingestion.build_index import (
+    EMBEDDING_MODEL,
+    MONGODB_COLLECTION,
+    MONGODB_DB,
+    VECTOR_FIELD,
+    VECTOR_INDEX_NAME,
+)
 
 
 @dataclass
@@ -23,21 +30,23 @@ class RetrievedChunk:
     publisher: str
     section_title: str
     url: str
-    distance: float
+    score: float  # Atlas vectorSearchScore: higher is more similar (unlike Chroma's distance).
     publication_year: Optional[int] = None
     page: Optional[int] = None
 
 
 @lru_cache(maxsize=1)
 def _collection():
-    import chromadb
+    from pymongo import MongoClient
 
-    if not CHROMA_DIR.exists():
+    mongodb_uri = os.environ.get("MONGODB_URI")
+    if not mongodb_uri:
         raise RuntimeError(
-            f"No index found at {CHROMA_DIR}. Run `python -m ingestion.build_index` first."
+            "MONGODB_URI is not set (see .env.example). Run `python -m ingestion.build_index` "
+            "first to populate the Atlas collection and vector index."
         )
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    return client.get_collection(CHROMA_COLLECTION)
+    client = MongoClient(mongodb_uri)
+    return client[MONGODB_DB][MONGODB_COLLECTION]
 
 
 def _embed_query(query: str) -> list[float]:
@@ -54,29 +63,45 @@ def _embed_query(query: str) -> list[float]:
 
 
 def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
-    """Top-k vector similarity search for `query` against the local index."""
+    """Top-k vector similarity search for `query` against the Atlas index."""
     query_embedding = _embed_query(query)
-    results = _collection().query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
-        include=["documents", "metadatas", "distances"],
-    )
-
-    documents = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    distances = results["distances"][0]
+    pipeline = [
+        {
+            "$vectorSearch": {
+                "index": VECTOR_INDEX_NAME,
+                "path": VECTOR_FIELD,
+                "queryVector": query_embedding,
+                "numCandidates": max(top_k * 10, 100),
+                "limit": top_k,
+            }
+        },
+        {
+            "$project": {
+                "text": 1,
+                "source_id": 1,
+                "source_title": 1,
+                "publisher": 1,
+                "section_title": 1,
+                "url": 1,
+                "publication_year": 1,
+                "page": 1,
+                "score": {"$meta": "vectorSearchScore"},
+            }
+        },
+    ]
+    results = _collection().aggregate(pipeline)
 
     return [
         RetrievedChunk(
-            text=text,
-            source_id=meta["source_id"],
-            source_title=meta["source_title"],
-            publisher=meta["publisher"],
-            section_title=meta["section_title"],
-            url=meta["url"],
-            distance=distance,
-            publication_year=meta.get("publication_year"),
-            page=meta.get("page"),
+            text=doc["text"],
+            source_id=doc["source_id"],
+            source_title=doc["source_title"],
+            publisher=doc["publisher"],
+            section_title=doc["section_title"],
+            url=doc["url"],
+            score=doc["score"],
+            publication_year=doc.get("publication_year"),
+            page=doc.get("page"),
         )
-        for text, meta, distance in zip(documents, metadatas, distances)
+        for doc in results
     ]

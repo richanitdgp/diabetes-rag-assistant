@@ -3,12 +3,16 @@ services:
     name: diabetes-rag-assistant
     env: python
     plan: free
-    buildCommand: >-
-      pip install -r requirements.txt &&
-      python ingestion/download_sources.py &&
-      python -m ingestion.build_index
+    # Ingestion (ingestion/build_index.py) is run separately, not on every
+    # build: it writes to the shared MongoDB Atlas cluster this service
+    # reads from, and re-running it on every deploy would be wasteful and
+    # could race concurrent deploys. Run it manually, or wire it up as a
+    # Render Cron Job / one-off Job whenever data/raw/manifest.json changes.
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: GOOGLE_API_KEY
+        sync: false
+      - key: MONGODB_URI
         sync: false

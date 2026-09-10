@@ -12,16 +12,18 @@ Document loading, chunking, and embedding scripts for building the vector store.
   metadata: source, section title, page/URL, publication year.
 - `build_index.py` — the runnable pipeline: parse every source in the
   manifest, embed the chunks with Gemini's `gemini-embedding-001`, and
-  upsert them into a local persistent Chroma collection at `data/chroma/`.
-  Run it directly, in CI, or on a schedule (e.g. after `download_sources.py`
-  picks up a new guideline year):
+  upsert them into a MongoDB Atlas collection (`diabetes_rag.chunks` by
+  default), creating its Atlas Vector Search index on first run if it
+  doesn't already exist. Run it directly, or on a schedule (e.g. after
+  `download_sources.py` picks up a new guideline year) — it's a separate,
+  occasional operation, not something the deployed API triggers itself:
 
   ```bash
-  python -m ingestion.build_index              # full pipeline (needs GOOGLE_API_KEY/GEMINI_API_KEY)
+  python -m ingestion.build_index              # full pipeline (needs GOOGLE_API_KEY/GEMINI_API_KEY, MONGODB_URI)
   python -m ingestion.build_index --parse-only  # parse + write data/processed/chunks.jsonl only
   ```
 
-  If `data/chroma/` already holds vectors from a different embedding model
-  (e.g. left over from testing another provider), delete that directory
-  first — a Chroma collection is locked to whatever dimensionality its
-  first entries were written with.
+  If the Atlas collection already holds vectors from a different embedding
+  model (e.g. left over from testing another provider), drop its vector
+  search index first — an Atlas vector index is locked to whatever
+  `numDimensions` it was created with, same constraint Chroma had.

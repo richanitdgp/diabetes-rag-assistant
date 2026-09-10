@@ -35,16 +35,22 @@ overwritten by id, so re-running is safe). A failed download is recorded
 in the manifest with `"status": "error"` and the underlying error, rather
 than silently skipped — check the manifest after each run.
 
-## `processed/` and `chroma/` (generated, gitignored)
+## `processed/` (generated, gitignored)
 
 `ingestion/build_index.py` parses everything in `raw/` into structured
-chunks (`processed/chunks.jsonl`, for inspection) and embeds + loads them
-into a local Chroma collection (`chroma/`). Both are build outputs
-regenerable from `raw/` — not committed, see `.gitignore`. Run it after
-`download_sources.py` picks up a new or updated source:
+chunks (`processed/chunks.jsonl`, for inspection), embeds them with Gemini,
+and upserts them into a MongoDB Atlas collection (external — not part of
+this repo's filesystem, unlike the old local Chroma setup). `processed/`
+is a build output regenerable from `raw/` — not committed, see
+`.gitignore`. Run it after `download_sources.py` picks up a new or updated
+source, or whenever you want to refresh what's in Atlas:
 
 ```bash
 python -m ingestion.build_index
 ```
+
+This is a separate, occasional operation, not something a deploy runs
+automatically — the API only ever reads from whatever's currently in the
+Atlas collection.
 
 - Large or sensitive datasets should not be committed directly — see `.gitignore` and add exclusions as needed.
