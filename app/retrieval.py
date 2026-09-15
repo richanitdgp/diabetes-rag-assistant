@@ -65,6 +65,8 @@ def _embed_query(query: str) -> list[float]:
 def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
     """Top-k vector similarity search for `query` against the Atlas index."""
     query_embedding = _embed_query(query)
+    print(f"Query embedding length: {len(query_embedding)}")
+
     pipeline = [
         {
             "$vectorSearch": {
@@ -89,6 +91,8 @@ def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
             }
         },
     ]
+
+    print(f"Running MongoDB query search aggregation pipeline: {pipeline}")
     results = _collection().aggregate(pipeline)
 
     return [
