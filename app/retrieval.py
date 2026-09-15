@@ -9,6 +9,7 @@ and document text are embedded differently for best retrieval quality.
 from __future__ import annotations
 
 import os
+import traceback
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
@@ -54,18 +55,24 @@ def _embed_query(query: str) -> list[float]:
     from google.genai import types
 
     client = genai.Client()
-    response = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=[query],
-        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
-    )
+    try:
+        response = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=[query],
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+        )
+    except Exception:
+        print(f"_embed_query() failed calling Gemini (model={EMBEDDING_MODEL!r}):", flush=True)
+        traceback.print_exc()
+        raise
     return response.embeddings[0].values
 
 
 def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
     """Top-k vector similarity search for `query` against the Atlas index."""
+    print(f"retrieve() called: query={query!r} top_k={top_k}", flush=True)
     query_embedding = _embed_query(query)
-    print(f"Query embedding length: {len(query_embedding)}")
+    print(f"Query embedding length: {len(query_embedding)}", flush=True)
 
     pipeline = [
         {
@@ -92,8 +99,14 @@ def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
         },
     ]
 
-    print(f"Running MongoDB query search aggregation pipeline: {pipeline}")
-    results = _collection().aggregate(pipeline)
+    print(f"Running MongoDB query search aggregation pipeline: {pipeline}", flush=True)
+    try:
+        results = list(_collection().aggregate(pipeline))
+    except Exception:
+        print("retrieve() failed running the Atlas $vectorSearch aggregation:", flush=True)
+        traceback.print_exc()
+        raise
+    print(f"Atlas returned {len(results)} chunk(s)", flush=True)
 
     return [
         RetrievedChunk(
