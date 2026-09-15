@@ -9,6 +9,8 @@ reranking, etc.) — see eval/ for the harness that will measure that.
 
 from __future__ import annotations
 
+import traceback
+
 from app.retrieval import RetrievedChunk
 
 CHAT_MODEL = "gemini-3.5-flash-lite"
@@ -59,6 +61,8 @@ def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
     if not chunks:
         return REFUSAL_MESSAGE
 
+    print(f"generate_answer() called with {len(chunks)} chunk(s), model={CHAT_MODEL!r}", flush=True)
+
     from google import genai
     from google.genai import types
 
@@ -70,12 +74,17 @@ def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
     )
 
     client = genai.Client()
-    response = client.models.generate_content(
-        model=CHAT_MODEL,
-        contents=user_message,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0,
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=CHAT_MODEL,
+            contents=user_message,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0,
+            ),
+        )
+    except Exception:
+        print(f"generate_answer() failed calling Gemini (model={CHAT_MODEL!r}):", flush=True)
+        traceback.print_exc()
+        raise
     return response.text or REFUSAL_MESSAGE

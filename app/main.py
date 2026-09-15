@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from pymongo.errors import PyMongoError
@@ -37,8 +39,23 @@ def ask(request: AskRequest) -> AskResponse:
         chunks = retrieve(request.question, top_k=request.top_k)
     except (RuntimeError, PyMongoError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        # TEMPORARY debug aid: surface the real exception in the response body
+        # instead of a bare "Internal Server Error", so root-causing a live
+        # deploy issue doesn't require digging through platform logs. Revert
+        # to a generic message once the underlying issue is found — returning
+        # raw exception text to API clients isn't something to leave in place.
+        print("Unexpected error in retrieve():", flush=True)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"retrieve() failed: {exc!r}") from exc
 
-    answer = generate_answer(request.question, chunks)
+    try:
+        answer = generate_answer(request.question, chunks)
+    except Exception as exc:
+        print("Unexpected error in generate_answer():", flush=True)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"generate_answer() failed: {exc!r}") from exc
+
     sources = [
         SourceRef(
             source_title=chunk.source_title,
