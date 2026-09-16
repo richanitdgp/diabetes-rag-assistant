@@ -26,6 +26,7 @@ answer. This doc walks a new engineer through how it's built, end to end.
 10. [Known limitations & gotchas](#10-known-limitations--gotchas)
 11. [Getting started](#11-getting-started)
 12. [Gemini usage, step by step](#12-gemini-usage-step-by-step)
+13. [OpenAI usage, step by step (RAGAS eval)](#13-openai-usage-step-by-step-ragas-eval)
 
 ---
 
@@ -412,3 +413,81 @@ Phases 2 and 3 above are exactly what runs during an eval pass — Gemini
 still does all the embedding and answering. OpenAI only enters afterward,
 as an external judge scoring Gemini's output with RAGAS; it never touches
 retrieval or generation itself. Gemini builds and answers, OpenAI grades.
+
+## 13. OpenAI usage, step by step (RAGAS eval)
+
+OpenAI never appears in the live `/ask` path — it exists solely inside
+`eval/run_ragas.py`, as an external judge scoring what Gemini already
+produced (see [§12](#12-gemini-usage-step-by-step)). This walks through
+where exactly it's called and why `ragas.evaluate()` needs two different
+OpenAI capabilities, not just one.
+
+**Phase 1 — Run the pipeline first (no OpenAI yet).** For every golden-set
+case, `run_pipeline_case()` calls the same `retrieve()` +
+`generate_answer()` from [§12](#12-gemini-usage-step-by-step) — Gemini
+embeds the question, Atlas returns chunks, Gemini generates the answer.
+This produces, per case, a question/answer/retrieved-chunks triple with no
+OpenAI involvement at all. This phase alone is enough for the
+refusal-accuracy scorer, which is why `--skip-ragas` needs no
+`OPENAI_API_KEY`.
+
+**Phase 2 — Assemble the RAGAS input (still no API calls).** `run_ragas_eval()`
+filters down to in-scope cases the pipeline actually answered (not refused,
+not errored), then builds an in-memory table per case:
+
+```
+user_input          = the question
+response            = Gemini's answer
+retrieved_contexts  = the retrieved chunk texts (from Atlas, via Gemini's query embedding)
+reference           = the golden set's must_include_facts, joined
+```
+
+**Phase 3 — This is where OpenAI is actually called.** Two OpenAI clients
+are constructed, both reading `OPENAI_API_KEY` from the environment:
+
+- `ChatOpenAI(model="gpt-4o-mini")` — the **judge**, used for reasoning/verdicts.
+- `OpenAIEmbeddings(model="text-embedding-3-small")` — used for one specific
+  similarity calculation.
+
+`ragas.evaluate()` then fires the actual calls, one case at a time, per metric:
+
+| Metric | What gets sent to OpenAI | Endpoint |
+|---|---|---|
+| `faithfulness` | Gemini's answer → chat call splitting it into atomic claims; each claim + retrieved chunk text → chat call asking "is this claim supported?" | Chat completions |
+| `context_precision` | Question + reference + each retrieved chunk → chat call asking "was this chunk actually useful?" | Chat completions |
+| `context_recall` | Reference text + retrieved chunks → chat call asking "is each part of the reference backed by these chunks?" | Chat completions |
+| `answer_relevancy` | Gemini's answer → chat call generating a few hypothetical questions it would answer; those questions + the original question → **embeddings** call, compared by cosine similarity locally | Chat completions **and** embeddings |
+
+`answer_relevancy` is the only metric needing both capabilities —
+generate-then-embed — which is why `evaluate()` takes both an `llm=` and an
+`embeddings=` argument even though the other three metrics only ever use
+the chat endpoint.
+
+**Phase 4 — Collect scores (no more API calls).** `result.to_pandas()`
+returns one row per case, one column per metric. `run_ragas_eval()`
+averages each column for the aggregate score and keeps per-row values for
+the JSON report's `cases[].ragas_scores`. Pure local computation from here
+— the report is written to `results/` (see `results/README.md`).
+
+**Why OpenAI and not Gemini for judging.** Two reasons, covered in more
+detail in `eval/README.md`:
+
+1. **Avoiding the model grading its own homework.** If Gemini judged its
+   own answers, its own stylistic quirks would tend to look "correct" to
+   itself — a known bias in LLM-as-judge setups. An independent model keeps
+   the score honest.
+2. **Plumbing.** RAGAS's wrappers (`LangchainLLMWrapper`,
+   `LangchainEmbeddingsWrapper`) expect LangChain-compatible clients. The
+   app talks to Gemini directly through the raw `google-genai` SDK, with no
+   LangChain in that path at all — wiring Gemini into RAGAS would mean
+   adding yet another LangChain provider package on top of the
+   `langchain-community`/`ragas` version pin already needed (see
+   [§10](#10-known-limitations--gotchas)). `langchain-openai` was already a
+   dependency and `OPENAI_API_KEY` was already provisioned in
+   `.env.example`, unused, so OpenAI was the path of least resistance.
+
+**One privacy note.** Because `faithfulness`/`context_precision`/
+`context_recall` send retrieved chunk text to OpenAI as part of the judging
+prompt, CDC page content leaves the app's infra and goes to OpenAI's API
+during evaluation. Harmless here since the corpus is public CDC text, but
+worth remembering if the corpus ever contains anything sensitive.
