@@ -1,7 +1,12 @@
 # Core RAG framework
-langchain>=0.2.0
-langchain-community>=0.2.0
-langchain-openai>=0.1.0
+# Pinned below 0.4/1.0: langchain-community>=0.4 dropped the legacy
+# `langchain_community.chat_models.vertexai` shim that ragas (see Evaluation
+# section) imports eagerly at package import time regardless of provider,
+# so newer langchain-community breaks `import ragas` outright.
+langchain>=0.3.27,<0.4.0
+langchain-core>=0.3.66,<1.0.0
+langchain-community>=0.3.27,<0.4.0
+langchain-openai>=0.2.14,<0.3.0
 
 # LLM provider (reserved for the generation/chat step, not currently used by ingestion)
 openai>=1.30.0
@@ -28,3 +33,11 @@ streamlit>=1.35.0
 
 # Config management
 python-dotenv>=1.0.0
+
+# Evaluation (eval/run_ragas.py): RAGAS metrics + golden-set loading.
+# ragas pinned <0.3.0 for compatibility with the langchain family pinned
+# above (see the note there) — newer ragas releases carry the same
+# eager-import break against langchain-community>=0.4.
+ragas>=0.2.15,<0.3.0
+datasets>=2.19.0
+pyyaml>=6.0

@@ -31,6 +31,41 @@ support — the two CDC pages (21 chunks) run out of distinct, non-redundant
 factual claims before 100. Expand when a properly licensed clinical
 guideline is added.
 
-There's no automated runner yet — this is the dataset itself. A harness
-that loads it, calls `/ask` for each case, and grades
-`must_include_facts`/citations/refusal-vs-answer is a natural next step.
+## `run_ragas.py`
+
+Automated harness that loads `golden_dataset.yaml`, runs every case through
+the live pipeline (`app.retrieval.retrieve` + `app.generation.generate_answer`
+— not the HTTP API, so no running server is needed), and scores it two ways:
+
+- **Refusal accuracy** (custom scorer, no LLM judge): does the assistant
+  answer the in-scope cases and refuse the out-of-scope ones, matching each
+  case's `expected_behavior`? Detected by exact string match against
+  `app.generation.REFUSAL_MESSAGE`. Reported overall and split by
+  in-scope/out-of-scope, with the list of mismatched cases.
+- **RAGAS metrics** — faithfulness, context precision, context recall, and
+  answer relevancy — computed over the in-scope cases the assistant actually
+  answered. Uses OpenAI (`OPENAI_API_KEY`) as RAGAS's judge LLM and
+  embeddings model, independent of the app's own Gemini generation model, so
+  the pipeline isn't grading itself. `must_include_facts` is joined into a
+  reference string for the metrics (context precision, context recall) that
+  need a ground truth to compare against.
+
+Results are written as a timestamped JSON file under `results/` (see
+`results/README.md`) so scores can be tracked across iterations — that
+history is what backs the metrics table in the top-level README.
+
+Requires the same environment as the running API
+(`GOOGLE_API_KEY`/`GEMINI_API_KEY`, `MONGODB_URI`) plus `OPENAI_API_KEY` for
+the RAGAS judge (see `.env.example`). Note the pinned `langchain*`/`ragas`
+versions in `requirements.txt` — see the comment there for why.
+
+```bash
+# Full run: refusal-accuracy + RAGAS metrics over all 68 cases
+python -m eval.run_ragas
+
+# Refusal-accuracy only, no OPENAI_API_KEY needed (fast iteration)
+python -m eval.run_ragas --skip-ragas
+
+# A subset of cases, and/or a different top_k
+python -m eval.run_ragas --case-id cdc-001 --case-id refuse-003 --top-k 8
+```
