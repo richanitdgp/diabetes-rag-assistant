@@ -69,3 +69,18 @@ python -m eval.run_ragas --skip-ragas
 # A subset of cases, and/or a different top_k
 python -m eval.run_ragas --case-id cdc-001 --case-id refuse-003 --top-k 8
 ```
+
+### CI gating (`--min-refusal-accuracy` / `--min-faithfulness`)
+
+`--min-refusal-accuracy 0.95` and `--min-faithfulness 0.8` make `main()`
+return exit code 1 (instead of 0) when the corresponding score falls below
+the threshold, without changing anything else about the run or the JSON
+report. `.github/workflows/eval.yml` uses these to gate pull requests that
+touch `app/generation.py`, `app/retrieval.py`, `eval/golden_dataset.yaml`,
+or this file — see that workflow for the required repo secrets
+(`MONGODB_URI`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`) and its cost caveat
+(every gated PR run calls all three APIs over the full golden set).
+
+```bash
+python -m eval.run_ragas --min-refusal-accuracy 0.95 --min-faithfulness 0.8
+```

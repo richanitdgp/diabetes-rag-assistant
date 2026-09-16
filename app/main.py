@@ -1,13 +1,19 @@
 import traceback
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from pymongo.errors import PyMongoError
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
-from app.generation import generate_answer
+from app.generation import REFUSAL_MESSAGE, generate_answer
+from app.guardrails import RATE_LIMIT, BudgetExceededError, limiter, out_of_bounds_reason
+from app.observability import record_guardrail_block
 from app.retrieval import retrieve
 
 app = FastAPI(title="diabetes-rag-assistant")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 class AskRequest(BaseModel):
@@ -33,10 +39,24 @@ def health() -> dict[str, str]:
 
 
 @app.post("/ask", response_model=AskResponse)
-def ask(request: AskRequest) -> AskResponse:
-    """Retrieve top-k relevant chunks and generate a context-grounded answer."""
+@limiter.limit(RATE_LIMIT)
+def ask(request: Request, payload: AskRequest) -> AskResponse:
+    """Retrieve top-k relevant chunks and generate a context-grounded answer.
+
+    Guardrails, checked in order before any paid API call: per-client rate
+    limit (`RATE_LIMIT`, via slowapi — see the 429 raised by
+    `_rate_limit_exceeded_handler` if exceeded), a pre-LLM filter for the
+    clearest out-of-bounds questions (`app.guardrails.out_of_bounds_reason`),
+    and a daily Gemini token budget (`app.guardrails.token_budget`, checked
+    inside `generate_answer()`).
+    """
+    reason = out_of_bounds_reason(payload.question)
+    if reason is not None:
+        record_guardrail_block("out_of_bounds_filter", payload.question, reason)
+        return AskResponse(answer=REFUSAL_MESSAGE, sources=[])
+
     try:
-        chunks = retrieve(request.question, top_k=request.top_k)
+        chunks = retrieve(payload.question, top_k=payload.top_k)
     except (RuntimeError, PyMongoError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
@@ -50,7 +70,9 @@ def ask(request: AskRequest) -> AskResponse:
         raise HTTPException(status_code=500, detail=f"retrieve() failed: {exc!r}") from exc
 
     try:
-        answer = generate_answer(request.question, chunks)
+        answer = generate_answer(payload.question, chunks)
+    except BudgetExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:
         print("Unexpected error in generate_answer():", flush=True)
         traceback.print_exc()

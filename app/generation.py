@@ -57,14 +57,23 @@ def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
 
     Refuses locally (no LLM call) when retrieval returned nothing at all —
     there is no context for the model to even attempt to ground an answer in.
+
+    Raises `app.guardrails.BudgetExceededError` if today's Gemini token
+    budget is already spent, before making the (paid) chat call.
     """
     if not chunks:
         return REFUSAL_MESSAGE
+
+    from app.guardrails import token_budget
+
+    token_budget.check()
 
     print(f"generate_answer() called with {len(chunks)} chunk(s), model={CHAT_MODEL!r}", flush=True)
 
     from google import genai
     from google.genai import types
+
+    from app.observability import get_langfuse
 
     user_message = (
         f"Context passages:\n\n{_format_context(chunks)}\n\n"
@@ -73,18 +82,37 @@ def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
         "citation [Source Title — Section Title] for every claim."
     )
 
-    client = genai.Client()
-    try:
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0,
-            ),
-        )
-    except Exception:
-        print(f"generate_answer() failed calling Gemini (model={CHAT_MODEL!r}):", flush=True)
-        traceback.print_exc()
-        raise
-    return response.text or REFUSAL_MESSAGE
+    langfuse = get_langfuse()
+    with langfuse.start_as_current_observation(
+        name="generate_answer", as_type="generation", input=user_message, model=CHAT_MODEL
+    ) as gen:
+        client = genai.Client()
+        try:
+            response = client.models.generate_content(
+                model=CHAT_MODEL,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0,
+                ),
+            )
+        except Exception:
+            print(f"generate_answer() failed calling Gemini (model={CHAT_MODEL!r}):", flush=True)
+            traceback.print_exc()
+            raise
+
+        answer = response.text or REFUSAL_MESSAGE
+        usage = response.usage_metadata
+        if usage is not None:
+            gen.update(
+                output=answer,
+                usage_details={
+                    "input": usage.prompt_token_count or 0,
+                    "output": usage.candidates_token_count or 0,
+                    "total": usage.total_token_count or 0,
+                },
+            )
+            token_budget.record(usage.total_token_count or 0)
+        else:
+            gen.update(output=answer)
+        return answer

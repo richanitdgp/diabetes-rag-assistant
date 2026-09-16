@@ -27,6 +27,7 @@ answer. This doc walks a new engineer through how it's built, end to end.
 11. [Getting started](#11-getting-started)
 12. [Gemini usage, step by step](#12-gemini-usage-step-by-step)
 13. [OpenAI usage, step by step (RAGAS eval)](#13-openai-usage-step-by-step-ragas-eval)
+14. [Observability, guardrails & CI gating](#14-observability-guardrails--ci-gating)
 
 ---
 
@@ -122,7 +123,9 @@ diabetes-rag-assistant/
 ├── app/                      # online: the FastAPI service
 │   ├── main.py                # routes: GET /health, POST /ask
 │   ├── retrieval.py           # embed query + Atlas $vectorSearch
-│   └── generation.py          # grounded prompt + Gemini chat call
+│   ├── generation.py          # grounded prompt + Gemini chat call
+│   ├── observability.py       # Langfuse tracing (see §14)
+│   └── guardrails.py          # rate limit, token budget, input filter (see §14)
 ├── ingestion/                 # offline: builds the knowledge base
 │   ├── download_sources.py    # fetch raw docs → data/raw/, update manifest
 │   ├── parsers.py             # raw file → structure-aware Chunk[]
@@ -131,7 +134,10 @@ diabetes-rag-assistant/
 │   └── raw/                   # tracked source docs + manifest.json
 │       └── cdc/                # diabetes-basics.html, living-with-diabetes.html
 ├── eval/
-│   └── golden_dataset.yaml    # 68 hand-curated Q&A / refusal cases
+│   ├── golden_dataset.yaml    # 68 hand-curated Q&A / refusal cases
+│   └── run_ragas.py           # eval harness (see §9, §13); also the CI gate (see §14)
+├── .github/workflows/
+│   └── eval.yml               # runs run_ragas.py on prompt/retrieval PRs (see §14)
 ├── render.yaml                # Render web service definition
 └── requirements.txt
 ```
@@ -140,9 +146,11 @@ diabetes-rag-assistant/
 
 | File | Role | Key pieces |
 |---|---|---|
-| `main.py` | FastAPI entry point | `GET /health` (liveness only, doesn't touch Atlas) · `POST /ask` ({question, top_k=5} → {answer, sources[]}) · RuntimeError/PyMongoError from retrieval → HTTP 503 |
-| `retrieval.py` | Vector similarity search | `_embed_query()` — Gemini `gemini-embedding-001`, `task_type=RETRIEVAL_QUERY` (asymmetric vs. document embedding) · `retrieve()` — `$vectorSearch`, `numCandidates=max(top_k×10, 100)` · raises `RuntimeError` if `MONGODB_URI` unset |
-| `generation.py` | Grounded answer synthesis | `SYSTEM_PROMPT` — 5 priority-ordered rules, see [§6](#6-grounding-rules-the-system-prompt) · `generate_answer()` — local refusal if chunks empty, else Gemini `gemini-3.5-flash-lite`, temperature=0 |
+| `main.py` | FastAPI entry point | `GET /health` (liveness only, doesn't touch Atlas) · `POST /ask` ({question, top_k=5} → {answer, sources[]}) · RuntimeError/PyMongoError from retrieval → HTTP 503 · guardrails wired in before/around the retrieve+generate calls (see [§14](#14-observability-guardrails--ci-gating)) |
+| `retrieval.py` | Vector similarity search | `_embed_query()` — Gemini `gemini-embedding-001`, `task_type=RETRIEVAL_QUERY` (asymmetric vs. document embedding) · `retrieve()` — `$vectorSearch`, `numCandidates=max(top_k×10, 100)`, traced via Langfuse · raises `RuntimeError` if `MONGODB_URI` unset |
+| `generation.py` | Grounded answer synthesis | `SYSTEM_PROMPT` — 5 priority-ordered rules, see [§6](#6-grounding-rules-the-system-prompt) · `generate_answer()` — local refusal if chunks empty, else Gemini `gemini-3.5-flash-lite`, temperature=0, traced via Langfuse, checks/records the daily token budget |
+| `observability.py` | Langfuse tracing | `get_langfuse()` — cached client, no-ops without `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` · `record_guardrail_block()` — logs a pre-LLM refusal as its own observation |
+| `guardrails.py` | Rate limit, token budget, input filter | `limiter`/`RATE_LIMIT` (slowapi, default `20/minute`) · `TokenBudget`/`token_budget` (daily Gemini token cap, default 500k) · `out_of_bounds_reason()` (pre-LLM regex filter) |
 
 ### `ingestion/` — offline pipeline
 
@@ -246,8 +254,11 @@ POST /ask
 |---|---|---|
 | `GOOGLE_API_KEY` / `GEMINI_API_KEY` | ingestion (embed), app (chat) | google-genai reads either; `GOOGLE_API_KEY` wins if both set. |
 | `MONGODB_URI` | ingestion (upsert), app (query) | Atlas cluster must support Vector Search. |
-| `OPENAI_API_KEY` | `eval/run_ragas.py` | RAGAS's judge LLM + embeddings (see [§12](#12-gemini-usage-step-by-step)) — independent of the app's own Gemini models, deliberately, so the pipeline isn't grading itself. |
+| `OPENAI_API_KEY` | `eval/run_ragas.py` | RAGAS's judge LLM + embeddings (see [§13](#13-openai-usage-step-by-step-ragas-eval)) — independent of the app's own Gemini models, deliberately, so the pipeline isn't grading itself. |
 | `ANTHROPIC_API_KEY` | — currently unused | Present in `.env.example`, no code path reads it. |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | `app/observability.py` | Optional. Unset → tracing silently no-ops (see [§14](#14-observability-guardrails--ci-gating)). |
+| `RATE_LIMIT` | `app/guardrails.py` | Optional, default `20/minute`. slowapi syntax. |
+| `MAX_DAILY_TOKENS` | `app/guardrails.py` | Optional, default `500000`. Gemini generation tokens/UTC day before `/ask` returns 429. |
 
 **Render (`render.yaml`)**: single web service, Python env, free plan.
 Build: `pip install -r requirements.txt`. Start: `uvicorn app.main:app
@@ -273,8 +284,11 @@ against real parser output rather than typed by hand.
 refuse-vs-answer behavior against `expected_behavior`, and — for in-scope
 cases that were actually answered — scores faithfulness/context
 precision/context recall/answer relevancy via RAGAS, using OpenAI as an
-independent judge (see [§12](#12-gemini-usage-step-by-step) for how that
-interacts with Gemini). Results land as timestamped JSON in `results/`.
+independent judge (see [§13](#13-openai-usage-step-by-step-ragas-eval) for
+how that interacts with Gemini). Results land as timestamped JSON in
+`results/`. `.github/workflows/eval.yml` runs this same harness with
+`--min-refusal-accuracy`/`--min-faithfulness` thresholds on any PR touching
+prompts, retrieval, or the golden set — see [§14](#14-observability-guardrails--ci-gating).
 
 ## 10. Known limitations & gotchas
 
@@ -491,3 +505,90 @@ detail in `eval/README.md`:
 prompt, CDC page content leaves the app's infra and goes to OpenAI's API
 during evaluation. Harmless here since the corpus is public CDC text, but
 worth remembering if the corpus ever contains anything sensitive.
+
+## 14. Observability, guardrails & CI gating
+
+Three additions on top of the v1 baseline in [§1](#1-overview)–[§3](#3-request-lifecycle-post-ask):
+tracing every request, guarding `/ask` against abuse and runaway cost, and
+gating pull requests on the golden set. None of these change the request/
+response contract in [§7](#7-api-reference) — they wrap the existing
+retrieve → generate flow.
+
+### Tracing (`app/observability.py`)
+
+`get_langfuse()` returns a cached `Langfuse()` client (OTel-based SDK,
+`start_as_current_observation()` — not the older `.trace()/.span()` API
+from Langfuse SDK v2). `retrieve()` and `generate_answer()` each wrap their
+body in an observation:
+
+| Call | `as_type` | Captures |
+|---|---|---|
+| `retrieve()` | `retriever` | query, `top_k`, retrieved chunks' `source_id`/`section_title`/`score` |
+| `generate_answer()` | `generation` | model, prompt, answer, `usage_details` (`prompt_token_count`/`candidates_token_count`/`total_token_count` from Gemini's `response.usage_metadata`) |
+| a pre-LLM guardrail block | `guardrail` | the question + which filter fired (`app.observability.record_guardrail_block`) |
+
+Because these are nested context managers, a live `/ask` call's Langfuse
+trace shows the guardrail check, retrieval, and generation as a single
+tree with per-step latency — automatic from each span's start/end time, no
+manual timing code needed. With `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`
+unset, `Langfuse()` logs one warning ("Client will be disabled") and every
+call becomes a no-op — verified against the installed SDK, not assumed.
+`eval/run_ragas.py` calls `retrieve()`/`generate_answer()` directly, so
+eval runs get traced too, for free.
+
+### Guardrails (`app/guardrails.py`)
+
+Checked in this order in `app/main.py`'s `ask()`, before any paid API call:
+
+1. **Rate limit** — [slowapi](https://github.com/laurentS/slowapi)'s
+   `Limiter`, keyed by client IP, default `20/minute` (`RATE_LIMIT`). Wired
+   via `app.state.limiter` + `@limiter.limit(RATE_LIMIT)` on the route;
+   exceeding it returns HTTP 429 from slowapi's own handler. Note:
+   `slowapi`'s decorator looks for a parameter literally named `request`
+   typed as `starlette.Request` — the route's existing `AskRequest` body
+   parameter was renamed to `payload` to make room for it.
+2. **Input filter** (`out_of_bounds_reason()`) — a conservative regex check
+   for the clearest out-of-bounds phrasings (personalized dosing amounts,
+   self-diagnosis questions like "do I have diabetes"). A hit short-circuits
+   to `REFUSAL_MESSAGE` before `retrieve()` is even called, saving an
+   embedding + generation call. This is a cost-saving fast path, not the
+   real backstop — `SYSTEM_PROMPT` rule 5 ([§6](#6-grounding-rules-the-system-prompt))
+   is what actually has to catch every phrasing this filter doesn't. Every
+   pattern was checked against all 68 `eval/golden_dataset.yaml` cases
+   before being added: 0 false positives against the 50 in-scope cases,
+   8 of 18 out-of-scope cases (the dosing-amount and self-diagnosis
+   subtypes) caught pre-LLM, the rest correctly left to the LLM.
+3. **Daily token budget** (`TokenBudget`/`token_budget`) — caps Gemini
+   *generation* tokens (not embedding tokens, which are comparatively
+   negligible) per UTC day, default 500,000 (`MAX_DAILY_TOKENS`).
+   `generate_answer()` calls `token_budget.check()` right before the paid
+   Gemini call (raises `BudgetExceededError`, which `app/main.py` maps to
+   HTTP 429) and `token_budget.record(usage.total_token_count)` right
+   after. Deliberately tracks tokens, not a dollar figure: Gemini's
+   per-token price changes over time, and hardcoding a number here that
+   silently goes stale would be worse than not having a dollar figure at
+   all — convert `MAX_DAILY_TOKENS` to a budget yourself against current
+   pricing at https://ai.google.dev/gemini-api/docs/pricing.
+
+**Single-instance caveat.** Both the rate limiter and `TokenBudget` keep
+state in-process (an in-memory dict for slowapi, a plain counter for
+`TokenBudget`) — correct for the one free-tier Render instance this
+deploys as ([§8](#8-environment--deployment)), but each instance would
+enforce its own separate limit/budget if this ever ran as more than one
+process. Move to a shared store (e.g. slowapi's Redis storage backend, and
+a Redis- or DB-backed counter in place of `TokenBudget`) before scaling out.
+
+### CI gating (`.github/workflows/eval.yml`)
+
+Runs `eval/run_ragas.py` (the same harness from [§9](#9-golden-eval-set))
+on any pull request touching `app/generation.py`, `app/retrieval.py`,
+`eval/golden_dataset.yaml`, or `eval/run_ragas.py` itself, using
+`--min-refusal-accuracy 0.95 --min-faithfulness 0.8` (tunable via the
+workflow's `env:` block) to fail the check if either drops below
+threshold. Needs `MONGODB_URI`, `GOOGLE_API_KEY`, and `OPENAI_API_KEY` as
+GitHub Actions repository secrets — without them the job fails fast with
+the same "not set" errors `eval/run_ragas.py` gives locally. Every gated
+run calls all three APIs over the full 68-case golden set, which has a
+real, non-zero dollar cost each time — inherent to gating on a live
+re-run against the real pipeline rather than a mock, not a bug in the
+workflow.

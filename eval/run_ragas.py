@@ -233,6 +233,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=DEFAULT_RESULTS_DIR,
         help="Directory to write the timestamped JSON report into (default: results/).",
     )
+    parser.add_argument(
+        "--min-refusal-accuracy",
+        type=float,
+        default=None,
+        help="Fail (exit 1) if overall refusal accuracy falls below this (0-1). For CI gating.",
+    )
+    parser.add_argument(
+        "--min-faithfulness",
+        type=float,
+        default=None,
+        help="Fail (exit 1) if mean RAGAS faithfulness falls below this (0-1). Ignored with --skip-ragas. For CI gating.",
+    )
     args = parser.parse_args(argv)
 
     dataset = load_golden_dataset()
@@ -310,6 +322,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     if ragas_aggregate:
         print(f"RAGAS: {ragas_aggregate}", flush=True)
+
+    failures: list[str] = []
+    if args.min_refusal_accuracy is not None:
+        overall = refusal_accuracy["overall_accuracy"]
+        if overall is None or overall < args.min_refusal_accuracy:
+            failures.append(f"refusal accuracy {overall} < required {args.min_refusal_accuracy}")
+    if args.min_faithfulness is not None:
+        faithfulness = (ragas_aggregate or {}).get("faithfulness")
+        if faithfulness is None or faithfulness < args.min_faithfulness:
+            failures.append(f"faithfulness {faithfulness} < required {args.min_faithfulness}")
+    if failures:
+        print("\nTHRESHOLD CHECK FAILED:", flush=True)
+        for f in failures:
+            print(f"  - {f}", flush=True)
+        return 1
 
     return 0
 

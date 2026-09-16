@@ -31,6 +31,10 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 streamlit>=1.35.0
 
+# Observability + guardrails (app/observability.py, app/guardrails.py)
+langfuse>=3.0.0
+slowapi>=0.1.9
+
 # Config management
 python-dotenv>=1.0.0
 

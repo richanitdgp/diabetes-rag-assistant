@@ -70,55 +70,67 @@ def _embed_query(query: str) -> list[float]:
 
 def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
     """Top-k vector similarity search for `query` against the Atlas index."""
-    print(f"retrieve() called: query={query!r} top_k={top_k}", flush=True)
-    query_embedding = _embed_query(query)
-    print(f"Query embedding length: {len(query_embedding)}", flush=True)
+    from app.observability import get_langfuse
 
-    pipeline = [
-        {
-            "$vectorSearch": {
-                "index": VECTOR_INDEX_NAME,
-                "path": VECTOR_FIELD,
-                "queryVector": query_embedding,
-                "numCandidates": max(top_k * 10, 100),
-                "limit": top_k,
-            }
-        },
-        {
-            "$project": {
-                "text": 1,
-                "source_id": 1,
-                "source_title": 1,
-                "publisher": 1,
-                "section_title": 1,
-                "url": 1,
-                "publication_year": 1,
-                "page": 1,
-                "score": {"$meta": "vectorSearchScore"},
-            }
-        },
-    ]
+    langfuse = get_langfuse()
+    with langfuse.start_as_current_observation(
+        name="retrieve", as_type="retriever", input={"query": query, "top_k": top_k}
+    ) as span:
+        print(f"retrieve() called: query={query!r} top_k={top_k}", flush=True)
+        query_embedding = _embed_query(query)
+        print(f"Query embedding length: {len(query_embedding)}", flush=True)
 
-    print(f"Running MongoDB query search aggregation pipeline: {pipeline}", flush=True)
-    try:
-        results = list(_collection().aggregate(pipeline))
-    except Exception:
-        print("retrieve() failed running the Atlas $vectorSearch aggregation:", flush=True)
-        traceback.print_exc()
-        raise
-    print(f"Atlas returned {len(results)} chunk(s)", flush=True)
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": VECTOR_INDEX_NAME,
+                    "path": VECTOR_FIELD,
+                    "queryVector": query_embedding,
+                    "numCandidates": max(top_k * 10, 100),
+                    "limit": top_k,
+                }
+            },
+            {
+                "$project": {
+                    "text": 1,
+                    "source_id": 1,
+                    "source_title": 1,
+                    "publisher": 1,
+                    "section_title": 1,
+                    "url": 1,
+                    "publication_year": 1,
+                    "page": 1,
+                    "score": {"$meta": "vectorSearchScore"},
+                }
+            },
+        ]
 
-    return [
-        RetrievedChunk(
-            text=doc["text"],
-            source_id=doc["source_id"],
-            source_title=doc["source_title"],
-            publisher=doc["publisher"],
-            section_title=doc["section_title"],
-            url=doc["url"],
-            score=doc["score"],
-            publication_year=doc.get("publication_year"),
-            page=doc.get("page"),
+        print(f"Running MongoDB query search aggregation pipeline: {pipeline}", flush=True)
+        try:
+            results = list(_collection().aggregate(pipeline))
+        except Exception:
+            print("retrieve() failed running the Atlas $vectorSearch aggregation:", flush=True)
+            traceback.print_exc()
+            raise
+        print(f"Atlas returned {len(results)} chunk(s)", flush=True)
+
+        chunks = [
+            RetrievedChunk(
+                text=doc["text"],
+                source_id=doc["source_id"],
+                source_title=doc["source_title"],
+                publisher=doc["publisher"],
+                section_title=doc["section_title"],
+                url=doc["url"],
+                score=doc["score"],
+                publication_year=doc.get("publication_year"),
+                page=doc.get("page"),
+            )
+            for doc in results
+        ]
+        span.update(
+            output=[
+                {"source_id": c.source_id, "section_title": c.section_title, "score": c.score} for c in chunks
+            ]
         )
-        for doc in results
-    ]
+        return chunks

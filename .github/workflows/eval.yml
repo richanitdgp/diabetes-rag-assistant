@@ -1,0 +1,58 @@
+name: Golden-set eval gate
+
+# Re-runs eval/run_ragas.py (see eval/README.md) against the live pipeline
+# whenever a PR touches the system prompt, retrieval, the golden set itself,
+# or the eval harness, and fails the check if refusal accuracy or
+# faithfulness drops below the thresholds below.
+#
+# Requires three repository secrets to actually run: MONGODB_URI (an Atlas
+# cluster with the vector index already built via
+# `python -m ingestion.build_index`), GOOGLE_API_KEY (or GEMINI_API_KEY),
+# and OPENAI_API_KEY (RAGAS's judge — see docs/ARCHITECTURE.md §13). Add
+# them under Settings → Secrets and variables → Actions. Every run of this
+# workflow calls all three of those APIs for the full golden set (68 cases),
+# which has a real, non-zero dollar cost — that's inherent to gating on a
+# live re-run rather than a mock, not a bug in this workflow.
+"on":
+  pull_request:
+    paths:
+      - "app/generation.py"
+      - "app/retrieval.py"
+      - "eval/golden_dataset.yaml"
+      - "eval/run_ragas.py"
+  workflow_dispatch: {}
+
+env:
+  MIN_REFUSAL_ACCURACY: "0.95"
+  MIN_FAITHFULNESS: "0.8"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run golden-set eval
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -m eval.run_ragas \
+            --min-refusal-accuracy "$MIN_REFUSAL_ACCURACY" \
+            --min-faithfulness "$MIN_FAITHFULNESS"
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: results/
+          if-no-files-found: ignore
