@@ -20,6 +20,9 @@ A retrieval-augmented generation (RAG) assistant for answering questions about d
    cp .env.example .env
    ```
    Then edit `.env` and fill in your `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
+   `OPENAI_API_KEY` is used by `eval/run_ragas.py` as the RAGAS judge model
+   (see [Evaluation](#evaluation)), independent of the app's own Gemini
+   generation model.
 
 ## Usage
 
@@ -46,3 +49,30 @@ A retrieval-augmented generation (RAG) assistant for answering questions about d
    strictly in retrieved context, cites `[Source Title — Section Title]`
    inline, and the assistant refuses rather than guesses when retrieval
    doesn't support a confident answer.
+
+## Evaluation
+
+`eval/run_ragas.py` runs the golden set (`eval/golden_dataset.yaml`, 50
+in-scope + 18 out-of-scope cases — see `eval/README.md`) through the live
+pipeline and scores it: RAGAS metrics (faithfulness, context precision,
+context recall, answer relevancy) on the in-scope answers, plus a custom
+refusal-accuracy check — does it answer in-scope questions and refuse
+out-of-scope ones. Each run writes a timestamped JSON report to `results/`
+so scores can be tracked across iterations.
+
+```bash
+python -m eval.run_ragas              # full run (needs OPENAI_API_KEY too)
+python -m eval.run_ragas --skip-ragas  # refusal-accuracy only, faster
+```
+
+Latest results (see `results/` for the full history and per-case detail):
+
+| Metric | Score | Run |
+| --- | --- | --- |
+| Refusal accuracy (overall) | _run `eval/run_ragas.py` to populate_ | |
+| Refusal accuracy (in-scope) | | |
+| Refusal accuracy (out-of-scope) | | |
+| Faithfulness | | |
+| Context precision | | |
+| Context recall | | |
+| Answer relevancy | | |
