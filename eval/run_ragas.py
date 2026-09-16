@@ -41,6 +41,7 @@ from typing import Any, Optional
 
 import yaml
 from dotenv import load_dotenv
+from langsmith import traceable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN_DATASET_PATH = REPO_ROOT / "eval" / "golden_dataset.yaml"
@@ -86,6 +87,7 @@ def load_golden_dataset(path: Path = GOLDEN_DATASET_PATH) -> dict[str, Any]:
     return yaml.safe_load(path.read_text())
 
 
+@traceable(name="run_pipeline_case")
 def run_pipeline_case(case: dict[str, Any], top_k: int) -> tuple[CaseResult, list[Any]]:
     """Call the live retrieve -> generate pipeline for one golden-set case."""
     from app.generation import REFUSAL_MESSAGE, generate_answer
@@ -144,6 +146,7 @@ def compute_refusal_accuracy(case_results: list[CaseResult]) -> dict[str, Any]:
     }
 
 
+@traceable(name="run_ragas_eval")
 def run_ragas_eval(
     case_results: list[CaseResult],
     contexts_by_id: dict[str, list[str]],
@@ -210,6 +213,7 @@ def run_ragas_eval(
     return aggregate, per_case
 
 
+@traceable(name="run_eval_suite")
 def main(argv: Optional[list[str]] = None) -> int:
     load_dotenv()
 

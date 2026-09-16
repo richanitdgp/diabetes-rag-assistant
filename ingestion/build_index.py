@@ -34,6 +34,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langsmith import traceable
 
 from ingestion.parsers import Chunk, parse_source
 
@@ -48,6 +49,7 @@ EMBEDDING_MODEL = "gemini-embedding-001"
 EMBED_BATCH_SIZE = 100
 
 
+@traceable(name="parse_all_sources")
 def parse_all_sources() -> list[Chunk]:
     manifest = json.loads(MANIFEST_PATH.read_text())
     chunks: list[Chunk] = []
@@ -70,6 +72,7 @@ def write_chunks_jsonl(chunks: list[Chunk], out_path: Path) -> None:
     print(f"wrote {len(chunks)} chunks to {out_path.relative_to(REPO_ROOT)}")
 
 
+@traceable(name="embed_chunks", run_type="embedding")
 def embed_chunks(chunks: list[Chunk]) -> list[list[float]]:
     from google import genai
     from google.genai import types
@@ -90,6 +93,7 @@ def embed_chunks(chunks: list[Chunk]) -> list[list[float]]:
     return embeddings
 
 
+@traceable(name="load_into_mongo")
 def load_into_mongo(chunks: list[Chunk], embeddings: list[list[float]]) -> None:
     from pymongo import MongoClient, ReplaceOne
 
@@ -151,6 +155,7 @@ def _ensure_vector_index(collection, dimensions: int) -> None:
     )
 
 
+@traceable(name="build_index")
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
