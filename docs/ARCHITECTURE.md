@@ -25,6 +25,7 @@ answer. This doc walks a new engineer through how it's built, end to end.
 9. [Golden eval set](#9-golden-eval-set)
 10. [Known limitations & gotchas](#10-known-limitations--gotchas)
 11. [Getting started](#11-getting-started)
+12. [Gemini usage, step by step](#12-gemini-usage-step-by-step)
 
 ---
 
@@ -244,7 +245,8 @@ POST /ask
 |---|---|---|
 | `GOOGLE_API_KEY` / `GEMINI_API_KEY` | ingestion (embed), app (chat) | google-genai reads either; `GOOGLE_API_KEY` wins if both set. |
 | `MONGODB_URI` | ingestion (upsert), app (query) | Atlas cluster must support Vector Search. |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — currently unused | Present in `.env.example` but no code path reads them (see [§10](#10-known-limitations--gotchas)). |
+| `OPENAI_API_KEY` | `eval/run_ragas.py` | RAGAS's judge LLM + embeddings (see [§12](#12-gemini-usage-step-by-step)) — independent of the app's own Gemini models, deliberately, so the pipeline isn't grading itself. |
+| `ANTHROPIC_API_KEY` | — currently unused | Present in `.env.example`, no code path reads it. |
 
 **Render (`render.yaml`)**: single web service, Python env, free plan.
 Build: `pip install -r requirements.txt`. Start: `uvicorn app.main:app
@@ -265,8 +267,13 @@ against real parser output rather than typed by hand.
   diagnosis, treatment decisions, out-of-corpus specificity, unrelated
   topics — each tagged with which `SYSTEM_PROMPT` rule should fire.
 
-No automated runner exists yet — the dataset is the artifact; a harness
-that calls `/ask` per case and grades the result is the natural next step.
+`eval/run_ragas.py` is the automated runner: it calls `retrieve()` +
+`generate_answer()` directly (not `/ask`) for every case, grades
+refuse-vs-answer behavior against `expected_behavior`, and — for in-scope
+cases that were actually answered — scores faithfulness/context
+precision/context recall/answer relevancy via RAGAS, using OpenAI as an
+independent judge (see [§12](#12-gemini-usage-step-by-step) for how that
+interacts with Gemini). Results land as timestamped JSON in `results/`.
 
 ## 10. Known limitations & gotchas
 
@@ -298,9 +305,13 @@ would otherwise rediscover the hard way.
 
 > **Dependencies.** `requirements.txt` lists `langchain`,
 > `langchain-community`, `langchain-openai`, `openai`, and `tiktoken` — none
-> are imported anywhere in `app/` or `ingestion/` (verified by grep). Likely
-> leftover from an earlier design; safe cleanup candidate, but confirm
-> before removing in case something external depends on them.
+> are imported anywhere in `app/` or `ingestion/` (verified by grep), so
+> they're still dead weight for the running service. `langchain-openai` is
+> no longer fully unused, though: `eval/run_ragas.py` imports it to hand
+> RAGAS an OpenAI-backed judge/embeddings model, and its version (along with
+> `langchain`/`langchain-core`/`langchain-community`) is pinned below their
+> 0.4/1.0 lines specifically for `ragas` compatibility — see the comment in
+> `requirements.txt`. `openai` and `tiktoken` remain genuinely unused.
 
 ## 11. Getting started
 
@@ -332,5 +343,72 @@ Local setup, in order.
      -H 'Content-Type: application/json' \
      -d '{"question": "What is type 2 diabetes?", "top_k": 5}'
    ```
-7. **Sanity-check against the golden set:** spot-check a few cases from
-   `eval/golden_dataset.yaml` by hand until an automated runner exists.
+7. **Run the eval harness against the golden set:**
+   ```bash
+   python -m eval.run_ragas --skip-ragas   # refusal-accuracy only, no OPENAI_API_KEY needed
+   python -m eval.run_ragas                # + RAGAS metrics, needs OPENAI_API_KEY
+   ```
+   See [§9](#9-golden-eval-set) and [§12](#12-gemini-usage-step-by-step).
+
+## 12. Gemini usage, step by step
+
+Gemini is the backbone of the app itself — it shows up in three distinct
+calls, split across two phases of the system's lifecycle (offline ingestion
+vs. live serving). This walks through all three in order, since §2/§3's
+diagrams show *where* they sit but not *why* two of them use the same model
+differently.
+
+**Phase 1 — Ingestion (offline, `python -m ingestion.build_index`).** Not
+triggered by any request; run by hand whenever `data/raw/manifest.json`
+changes.
+
+1. `parse_all_sources()` splits the CDC HTML pages into `Chunk` objects —
+   plain HTML parsing, no Gemini call yet.
+2. `embed_chunks()` (`ingestion/build_index.py`) sends chunk texts to
+   Gemini's **embedding** model, `gemini-embedding-001`, in batches of 100,
+   with `task_type="RETRIEVAL_DOCUMENT"`. This is the first Gemini call in
+   the system — it turns each CDC chunk into a vector.
+3. `load_into_mongo()` upserts each chunk's text + embedding into Atlas and
+   creates the vector search index if it doesn't exist yet.
+
+End state: Atlas holds 21 chunks, each with a Gemini-generated vector next
+to its text. Gemini's ingestion job is done until a source page changes.
+
+**Phase 2 — Live query, retrieval (`app/retrieval.py`, every `POST /ask`).**
+
+4. `_embed_query()` sends the **question** (not a document) to the same
+   `gemini-embedding-001` model, but with `task_type="RETRIEVAL_QUERY"`
+   instead of `RETRIEVAL_DOCUMENT`. Gemini's embedding model is asymmetric —
+   a question and a passage that mean the same thing are deliberately
+   embedded differently for better retrieval — which is why ingestion and
+   retrieval use the same model but different `task_type` values, and why
+   query vectors can't reuse Phase 1's document embeddings.
+5. That query vector goes into Atlas's `$vectorSearch` aggregation, which
+   returns the top-k nearest chunks. Gemini's role ends here — the
+   nearest-neighbor search itself happens inside Atlas, not Gemini.
+
+**Phase 3 — Live query, generation (`app/generation.py`).**
+
+6. The retrieved chunks + question get wrapped in `SYSTEM_PROMPT` (context-
+   only, cite `[Source — Section]`, refuse if unsupported, never give
+   personalized medical advice — see [§6](#6-grounding-rules-the-system-prompt))
+   and sent as a **chat** call to `gemini-3.5-flash-lite` — a third, separate
+   Gemini model from the embedding one.
+7. Gemini's response is the final answer. If retrieval returned zero
+   chunks, this step never happens — `generate_answer()` short-circuits to
+   `REFUSAL_MESSAGE` locally (see [§3](#3-request-lifecycle-post-ask)).
+
+**Summary — three touchpoints, two models:**
+
+| Step | When | Gemini model | `task_type` |
+|---|---|---|---|
+| Embed corpus chunks | Ingestion (offline) | `gemini-embedding-001` | `RETRIEVAL_DOCUMENT` |
+| Embed the question | Every `/ask` call | `gemini-embedding-001` | `RETRIEVAL_QUERY` |
+| Generate the answer | Every `/ask` call (unless retrieval was empty) | `gemini-3.5-flash-lite` | n/a (chat) |
+
+**How this connects to the eval harness.** `eval/run_ragas.py` calls
+`retrieve()` and `generate_answer()` directly for every golden-set case, so
+Phases 2 and 3 above are exactly what runs during an eval pass — Gemini
+still does all the embedding and answering. OpenAI only enters afterward,
+as an external judge scoring Gemini's output with RAGAS; it never touches
+retrieval or generation itself. Gemini builds and answers, OpenAI grades.
