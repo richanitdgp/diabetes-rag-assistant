@@ -1,6 +1,7 @@
 import traceback
 
 from fastapi import FastAPI, HTTPException
+from langsmith import traceable
 from pydantic import BaseModel, Field
 from pymongo.errors import PyMongoError
 
@@ -33,6 +34,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/ask", response_model=AskResponse)
+@traceable(name="answer_query")
 def ask(request: AskRequest) -> AskResponse:
     """Retrieve top-k relevant chunks and generate a context-grounded answer."""
     try:

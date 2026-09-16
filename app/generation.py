@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import traceback
 
+from langsmith import traceable
+
 from app.retrieval import RetrievedChunk
 
 CHAT_MODEL = "gemini-3.5-flash-lite"
@@ -52,6 +54,7 @@ def _format_context(chunks: list[RetrievedChunk]) -> str:
     )
 
 
+@traceable(name="generate_answer", run_type="llm")
 def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
     """Call the chat model with a strict, context-only system prompt.
 

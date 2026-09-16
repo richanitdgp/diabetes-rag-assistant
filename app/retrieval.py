@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
+from langsmith import traceable
+
 from ingestion.build_index import (
     EMBEDDING_MODEL,
     MONGODB_COLLECTION,
@@ -50,6 +52,7 @@ def _collection():
     return client[MONGODB_DB][MONGODB_COLLECTION]
 
 
+@traceable(name="embed_query", run_type="embedding")
 def _embed_query(query: str) -> list[float]:
     from google import genai
     from google.genai import types
@@ -68,6 +71,7 @@ def _embed_query(query: str) -> list[float]:
     return response.embeddings[0].values
 
 
+@traceable(name="retrieve_chunks", run_type="retriever")
 def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
     """Top-k vector similarity search for `query` against the Atlas index."""
     print(f"retrieve() called: query={query!r} top_k={top_k}", flush=True)
